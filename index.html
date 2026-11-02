@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SIMA IoT - Dashboard</title>
+
+  <!-- ========================================================================= -->
+  <!-- CONFIGURACIÓN GLOBAL / VARIABLES DE DESPLIEGUE RÁPIDO                     -->
+  <!-- Modifica estos parámetros al desplegar el sistema en un nuevo servidor    -->
+  <!-- ========================================================================= -->
+  <script>
+    // 1. Host y puerto del servidor Backend (API REST y WebSocket)
+    // Cambia 'localhost' por la IP o Dominio del servidor donde esté el backend.
+    // Ej: "192.168.1.100" o "sima-iot.midominio.com"
+    const BACKEND_HOST = "localhost";
+    const BACKEND_PORT = "3000";       // Deja vacío "" si usas puerto estándar 80 o 443
+    const USE_HTTPS    = false;        // Cambia a true si usas SSL/HTTPS
+
+    // 2. Construcción automática de URLs
+    const PROTOCOL   = USE_HTTPS ? "https" : "http";
+    const BASE_URL   = BACKEND_PORT ? `${PROTOCOL}://${BACKEND_HOST}:${BACKEND_PORT}` : `${PROTOCOL}://${BACKEND_HOST}`;
+    const API_URL    = `${BASE_URL}/api`;
+    const SOCKET_URL = BASE_URL;
+
+    // 3. Configuración de Paginación
+    const LIMIT_NODOS_TABLA     = 10;  // Número de lecturas por página en detalle de nodo
+    const LIMIT_DASHBOARD_TABLA = 15;  // Número de lecturas por página en el dashboard
+  </script>
+
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <style>
+    body { background-color: #f4f6f9; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    .vista { display: none; }
+    .vista.activa { display: block; }
+    .card-stat { border-left: 5px solid #0d6efd; transition: transform 0.15s ease-in-out; }
+    .card-stat:hover { transform: translateY(-2px); }
+    .sidebar { min-height: 100vh; background: #212529; color: white; padding-top: 20px; }
+    .sidebar h4 { letter-spacing: 1px; }
+    .nav-link { color: #adb5bd; cursor: pointer; border-radius: 6px; margin-bottom: 4px; padding: 10px 14px; }
+    .nav-link:hover { color: #ffffff; background: #343a40; }
+    .nav-link.active { color: #ffffff; background: #0d6efd; font-weight: 600; }
+    .table-responsive { box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075); border-radius: 8px; }
+    .badge-sensor { font-family: monospace; font-size: 0.9em; }
+    .pagination-bar { background-color: #ffffff; border-radius: 6px; padding: 8px 14px; }
+  </style>
+</head>
+<body>
+  <div class="container-fluid">
+    <div class="row">
+      <!-- SIDEBAR NAVEGACIÓN -->
+      <nav class="col-md-3 col-lg-2 sidebar d-flex flex-column p-3">
+        <h4 class="text-primary fw-bold text-center mb-0">SIMA IoT</h4>
+        <small class="text-muted text-center mb-3">Monitor Ambiental</small>
+        <hr class="border-secondary">
+        <ul class="nav nav-pills flex-column mb-auto">
+          <li class="nav-item">
+            <a class="nav-link active" onclick="cambiarVista('dashboard', this)">Dashboard</a>
+          </li>
+          <li class="nav-item">
+            <a class="nav-link" onclick="cambiarVista('nodos', this)">Gestión de Nodos</a>
+          </li>
+          <li class="nav-item">
+            <a class="nav-link" onclick="cambiarVista('usuarios', this)">Usuarios</a>
+          </li>
+        </ul>
+        <hr class="border-secondary">
+        <div class="text-muted small">
+          Estado: <span id="socket-status" class="badge bg-warning text-dark">Conectando...</span>
+        </div>
+      </nav>
+
+      <!-- CONTENIDO PRINCIPAL -->
+      <main class="col-md-9 col-lg-10 p-4">
+
+        <!-- ================= VISTA 1: DASHBOARD ================= -->
+        <div id="vista-dashboard" class="vista activa">
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <h2 class="fw-bold mb-0">Dashboard en Tiempo Real</h2>
+            <button class="btn btn-outline-secondary btn-sm" onclick="cargarDashboard(1)">Actualizar</button>
+          </div>
+
+          <!-- Cards de Métricas -->
+          <div class="row mb-4 g-3">
+            <div class="col-md-4">
+              <div class="card card-stat shadow-sm border-0"><div class="card-body">
+                <h6 class="text-muted mb-1">Última Temperatura</h6>
+                <h3 id="dash-temp" class="text-primary mb-0 fw-bold">-- °C</h3>
+              </div></div>
+            </div>
+            <div class="col-md-4">
+              <div class="card card-stat shadow-sm border-0" style="border-left-color: #198754 !important;"><div class="card-body">
+                <h6 class="text-muted mb-1">Última Humedad</h6>
+                <h3 id="dash-hum" class="text-success mb-0 fw-bold">-- %</h3>
+              </div></div>
+            </div>
+            <div class="col-md-4">
+              <div class="card card-stat shadow-sm border-0" style="border-left-color: #dc3545 !important;"><div class="card-body">
+                <h6 class="text-muted mb-1">Última Presión</h6>
+                <h3 id="dash-pres" class="text-danger mb-0 fw-bold">-- hPa</h3>
+              </div></div>
+            </div>
+          </div>
+
+          <!-- Tabla Historial Relacional -->
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <h4 class="fw-bold mb-0">Historial Relacional (Lecturas + Origen)</h4>
+          </div>
+          <div class="table-responsive bg-white p-3 shadow-sm rounded">
+            <table class="table table-hover align-middle mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Fecha</th>
+                  <th>Nodo (MAC)</th>
+                  <th>Ciudad (Relación)</th>
+                  <th>Temp</th>
+                  <th>Humedad</th>
+                  <th>Presión</th>
+                </tr>
+              </thead>
+              <tbody id="tabla-dashboard">
+                <tr><td colspan="6" class="text-center py-3 text-muted">Cargando lecturas...</td></tr>
+              </tbody>
+            </table>
+
+            <!-- Paginación Dashboard -->
+            <div class="d-flex justify-content-between align-items-center mt-3 pt-3 border-top">
+              <button id="btn-ant-dash" class="btn btn-outline-primary btn-sm px-3" onclick="paginarDashboard(-1)" disabled>
+                &laquo; Anterior
+              </button>
+              <span id="dash-pagina-actual" class="fw-semibold text-secondary">Página 1</span>
+              <button id="btn-sig-dash" class="btn btn-outline-primary btn-sm px-3" onclick="paginarDashboard(1)">
+                Siguiente &raquo;
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ================= VISTA 2: NODOS ================= -->
+        <div id="vista-nodos" class="vista">
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <h2 class="fw-bold mb-0">Gestión de Nodos Sensores</h2>
+            <button class="btn btn-outline-secondary btn-sm" onclick="cargarNodos()">Actualizar</button>
+          </div>
+
+          <!-- Formulario Registro Nodo -->
+          <div class="card mb-4 shadow-sm border-0">
+            <div class="card-body">
+              <h5 class="card-title fw-bold mb-3">Registrar Nuevo Nodo</h5>
+              <form id="form-nodo" class="row g-3" onsubmit="registrarNodo(event)">
+                <div class="col-md-3">
+                  <label class="form-label small text-muted">MAC / ID del Sensor</label>
+                  <input type="text" id="nodo-mac" class="form-control" placeholder="Ej. ESP32_03" required>
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label small text-muted">Ciudad de Origen</label>
+                  <input type="text" id="nodo-ciudad" class="form-control" placeholder="Ej. Puno" required>
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label small text-muted">Usuario Asignado (Opcional)</label>
+                  <select id="nodo-usuario" class="form-select">
+                    <option value="">-- Sin usuario asignado --</option>
+                  </select>
+                </div>
+                <div class="col-md-2 d-flex align-items-end">
+                  <button type="submit" class="btn btn-primary w-100">Guardar</button>
+                </div>
+              </form>
+            </div>
+          </div>
+
+          <!-- Lista de Tarjetas (Cards) de Nodos -->
+          <h5 class="fw-bold mb-3">Dispositivos Registrados</h5>
+          <div class="row" id="contenedor-cards-nodos">
+            <div class="col-12"><div class="text-muted">Cargando nodos...</div></div>
+          </div>
+
+          <!-- Detalle del Nodo (Se muestra al hacer clic en un card) -->
+          <div id="detalle-nodo" class="mt-4 bg-white p-3 shadow-sm rounded d-none">
+            <div class="d-flex justify-content-between align-items-center mb-3 pb-2 border-bottom">
+              <div>
+                <h4 id="titulo-detalle-nodo" class="fw-bold text-primary mb-0">Lecturas del Nodo</h4>
+                <small class="text-muted">Historial filtrado de mediciones ambientales</small>
+              </div>
+              <button class="btn btn-sm btn-outline-secondary" onclick="cerrarDetalleNodo()">Cerrar Detalle</button>
+            </div>
+            <div class="table-responsive">
+              <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                  <tr>
+                    <th>Fecha y Hora</th>
+                    <th>Temperatura (°C)</th>
+                    <th>Humedad (%)</th>
+                    <th>Presión (hPa)</th>
+                  </tr>
+                </thead>
+                <tbody id="tabla-detalle-nodo"></tbody>
+              </table>
+            </div>
+
+            <!-- Paginación Detalle Nodo -->
+            <div class="d-flex justify-content-between align-items-center mt-3 pt-3 border-top">
+              <button id="btn-ant-nodo" class="btn btn-outline-primary btn-sm px-3" onclick="paginarNodo(-1)" disabled>
+                &laquo; Anterior
+              </button>
+              <span id="nodo-pagina-actual" class="fw-semibold text-secondary">Página 1</span>
+              <button id="btn-sig-nodo" class="btn btn-outline-primary btn-sm px-3" onclick="paginarNodo(1)">
+                Siguiente &raquo;
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ================= VISTA 3: USUARIOS ================= -->
+        <div id="vista-usuarios" class="vista">
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <h2 class="fw-bold mb-0">Gestión de Usuarios</h2>
+            <button class="btn btn-outline-secondary btn-sm" onclick="cargarUsuarios()">Actualizar</button>
+          </div>
+
+          <!-- Formulario Registro Usuario -->
+          <div class="card mb-4 shadow-sm border-0">
+            <div class="card-body">
+              <h5 class="card-title fw-bold mb-3">Crear Nuevo Usuario</h5>
+              <form id="form-usuario" class="row g-3" onsubmit="registrarUsuario(event)">
+                <div class="col-md-3">
+                  <label class="form-label small text-muted">Nombre</label>
+                  <input type="text" id="usu-nombre" class="form-control" placeholder="Ej. Jersson" required>
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label small text-muted">Apellido</label>
+                  <input type="text" id="usu-apellido" class="form-control" placeholder="Ej. Quispe Apaza">
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label small text-muted">Correo Electrónico</label>
+                  <input type="email" id="usu-email" class="form-control" placeholder="ejemplo@correo.com" required>
+                </div>
+                <div class="col-md-2">
+                  <label class="form-label small text-muted">Rol</label>
+                  <select id="usu-rol" class="form-select">
+                    <option value="investigador" selected>investigador</option>
+                    <option value="ingeniero">ingeniero</option>
+                    <option value="administrador">administrador</option>
+                  </select>
+                </div>
+                <div class="col-md-1 d-flex align-items-end">
+                  <button type="submit" class="btn btn-success w-100">Crear</button>
+                </div>
+              </form>
+            </div>
+          </div>
+
+          <!-- Tabla de Usuarios -->
+          <div class="table-responsive bg-white p-3 shadow-sm rounded">
+            <table class="table table-hover align-middle mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Nombre Completo</th>
+                  <th>Email</th>
+                  <th>Rol</th>
+                  <th>Fecha Registro</th>
+                  <th class="text-center">Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="tabla-usuarios">
+                <tr><td colspan="5" class="text-center py-3 text-muted">Cargando usuarios...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </main>
+    </div>
+  </div>
+
+  <!-- SCRIPT LÓGICO PRINCIPAL -->
+  <script>
+    // Variables de Estado de Paginación
+    let paginaActualDashboard = 1;
+    let totalPaginasDashboard = 1;
+
+    let paginaActualNodo = 1;
+    let totalPaginasNodo = 1;
+    let macNodoSeleccionado = "";
+
+    let listaUsuariosCache = [];
+
+    // ==========================================
+    // 1. NAVEGACIÓN SPA
+    // ==========================================
+    function cambiarVista(vistaId, elemento = null) {
+      document.querySelectorAll('.vista').forEach(el => el.classList.remove('activa'));
+      document.querySelectorAll('.nav-link').forEach(el => el.classList.remove('active'));
+
+      const vistaEl = document.getElementById(`vista-${vistaId}`);
+      if (vistaEl) vistaEl.classList.add('activa');
+
+      if (elemento) {
+        elemento.classList.add('active');
+      } else {
+        const link = document.querySelector(`[onclick*="'${vistaId}'"]`);
+        if (link) link.classList.add('active');
+      }
+
+      if (vistaId === 'dashboard') cargarDashboard(1);
+      if (vistaId === 'nodos') cargarNodos();
+      if (vistaId === 'usuarios') cargarUsuarios();
+    }
+
+    // ==========================================
+    // 2. DASHBOARD Y CONEXIÓN WEBSOCKET
+    // ==========================================
+    const socket = io(SOCKET_URL);
+
+    socket.on("connect", () => {
+      const badge = document.getElementById("socket-status");
+      if (badge) {
+        badge.className = "badge bg-success";
+        badge.innerText = "En Línea";
+      }
+    });
+
+    socket.on("disconnect", () => {
+      const badge = document.getElementById("socket-status");
+      if (badge) {
+        badge.className = "badge bg-danger";
+        badge.innerText = "Desconectado";
+      }
+    });
+
+    socket.on("nuevo_dato_sensor", (dato) => {
+      // 1. Actualizar KPIs del Dashboard
+      if (dato.temperatura !== undefined && dato.temperatura !== null) {
+        document.getElementById("dash-temp").innerText = `${dato.temperatura} °C`;
+      }
+      if (dato.humedad !== undefined && dato.humedad !== null) {
+        document.getElementById("dash-hum").innerText = `${dato.humedad} %`;
+      }
+      if (dato.presion !== undefined && dato.presion !== null) {
+        document.getElementById("dash-pres").innerText = `${dato.presion} hPa`;
+      }
+
+      // 2. Actualizar Tabla en tiempo real solo si estamos en la Página 1
+      if (paginaActualDashboard === 1) {
+        const tbody = document.getElementById("tabla-dashboard");
+        if (tbody) {
+          // Si había fila de cargando o vacío, limpiarla
+          if (tbody.children.length === 1 && tbody.children[0].innerText.includes("Cargando")) {
+            tbody.innerHTML = "";
+          }
+
+          const tr = document.createElement("tr");
+          tr.classList.add("table-success");
+          setTimeout(() => tr.classList.remove("table-success"), 1500);
+
+          const fechaTexto = dato.fecha ? new Date(dato.fecha).toLocaleString() : new Date().toLocaleString();
+          tr.innerHTML = `
+            <td>${fechaTexto}</td>
+            <td><span class="badge bg-secondary badge-sensor">${dato.sensor_id || '-'}</span></td>
+            <td><span class="badge bg-info text-dark">Tiempo Real</span></td>
+            <td>${dato.temperatura !== undefined ? dato.temperatura + ' °C' : '-'}</td>
+            <td>${dato.humedad !== undefined ? dato.humedad + ' %' : '-'}</td>
+            <td>${dato.presion !== undefined ? dato.presion + ' hPa' : '-'}</td>
+          `;
+          tbody.prepend(tr);
+          if (tbody.children.length > LIMIT_DASHBOARD_TABLA) {
+            tbody.removeChild(tbody.lastChild);
+          }
+        }
+      }
+
+      // 3. Si el usuario está viendo el detalle de este nodo en particular en pág 1
+      if (macNodoSeleccionado && macNodoSeleccionado === dato.sensor_id && paginaActualNodo === 1) {
+        const tbodyNodo = document.getElementById("tabla-detalle-nodo");
+        if (tbodyNodo) {
+          if (tbodyNodo.children.length === 1 && tbodyNodo.children[0].innerText.includes("No hay")) {
+            tbodyNodo.innerHTML = "";
+          }
+          const trNodo = document.createElement("tr");
+          trNodo.classList.add("table-success");
+          setTimeout(() => trNodo.classList.remove("table-success"), 1500);
+          const fechaTexto = dato.fecha ? new Date(dato.fecha).toLocaleString() : new Date().toLocaleString();
+          trNodo.innerHTML = `
+            <td>${fechaTexto}</td>
+            <td>${dato.temperatura !== undefined ? dato.temperatura : '-'}</td>
+            <td>${dato.humedad !== undefined ? dato.humedad : '-'}</td>
+            <td>${dato.presion !== undefined ? dato.presion : '-'}</td>
+          `;
+          tbodyNodo.prepend(trNodo);
+          if (tbodyNodo.children.length > LIMIT_NODOS_TABLA) {
+            tbodyNodo.removeChild(tbodyNodo.lastChild);
+          }
+        }
+      }
+    });
+
+    async function cargarDashboard(pagina = 1) {
+      paginaActualDashboard = Math.max(1, pagina);
+      try {
+        const res = await fetch(`${API_URL}/datos/relacional?page=${paginaActualDashboard}&limit=${LIMIT_DASHBOARD_TABLA}`);
+        if (!res.ok) throw new Error("Error en la solicitud HTTP");
+        const datos = await res.json();
+
+        // Control de Paginación mediante Header X-Total-Count
+        const totalHeader = res.headers.get("X-Total-Count");
+        const totalCount = totalHeader !== null ? parseInt(totalHeader) : null;
+
+        if (totalCount !== null && !isNaN(totalCount)) {
+          totalPaginasDashboard = Math.max(1, Math.ceil(totalCount / LIMIT_DASHBOARD_TABLA));
+          document.getElementById("dash-pagina-actual").innerText = `Página ${paginaActualDashboard} de ${totalPaginasDashboard} (${totalCount} lecturas)`;
+        } else {
+          totalPaginasDashboard = datos.length < LIMIT_DASHBOARD_TABLA ? paginaActualDashboard : paginaActualDashboard + 1;
+          document.getElementById("dash-pagina-actual").innerText = `Página ${paginaActualDashboard}`;
+        }
+
+        const btnAnt = document.getElementById("btn-ant-dash");
+        const btnSig = document.getElementById("btn-sig-dash");
+        if (btnAnt) btnAnt.disabled = (paginaActualDashboard <= 1);
+        if (btnSig) btnSig.disabled = (paginaActualDashboard >= totalPaginasDashboard || datos.length === 0);
+
+        const tbody = document.getElementById("tabla-dashboard");
+        if (datos.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted py-3">No hay datos registrados en esta página.</td></tr>`;
+          return;
+        }
+
+        // Si es la primera carga y tenemos datos, actualizamos las cards con el más reciente
+        if (paginaActualDashboard === 1 && datos.length > 0) {
+          const ultimo = datos[0];
+          if (ultimo.temperatura !== undefined) document.getElementById("dash-temp").innerText = `${ultimo.temperatura} °C`;
+          if (ultimo.humedad !== undefined) document.getElementById("dash-hum").innerText = `${ultimo.humedad} %`;
+          if (ultimo.presion !== undefined) document.getElementById("dash-pres").innerText = `${ultimo.presion} hPa`;
+        }
+
+        tbody.innerHTML = datos.map(d => {
+          const ciudad = (d.datos_origen && d.datos_origen.ciudad)
+            ? d.datos_origen.ciudad
+            : '<span class="text-muted fst-italic">Sin asignar</span>';
+          const fechaStr = d.fecha ? new Date(d.fecha).toLocaleString() : 'N/A';
+          return `
+            <tr>
+              <td>${fechaStr}</td>
+              <td><span class="badge bg-secondary badge-sensor">${d.sensor_id || '-'}</span></td>
+              <td>${ciudad}</td>
+              <td>${d.temperatura !== undefined ? d.temperatura + ' °C' : '-'}</td>
+              <td>${d.humedad !== undefined ? d.humedad + ' %' : '-'}</td>
+              <td>${d.presion !== undefined ? d.presion + ' hPa' : '-'}</td>
+            </tr>
+          `;
+        }).join("");
+      } catch (e) {
+        console.error("Error cargando dashboard:", e);
+      }
+    }
+
+    function paginarDashboard(direccion) {
+      const nuevaPagina = paginaActualDashboard + direccion;
+      if (nuevaPagina >= 1 && nuevaPagina <= totalPaginasDashboard) {
+        cargarDashboard(nuevaPagina);
+      }
+    }
+
+    // ==========================================
+    // 3. GESTIÓN DE NODOS
+    // ==========================================
+    async function cargarNodos() {
+      try {
+        // Cargar lista de usuarios para asignar en formulario y mostrar nombres
+        const resUsu = await fetch(`${API_URL}/usuarios`);
+        if (resUsu.ok) {
+          listaUsuariosCache = await resUsu.json();
+          const selectUsu = document.getElementById("nodo-usuario");
+          if (selectUsu) {
+            selectUsu.innerHTML = '<option value="">-- Sin usuario asignado --</option>' +
+              listaUsuariosCache.map(u => {
+                const nombreCompleto = `${u.nombre || ''} ${u.apellido || ''}`.trim();
+                return `<option value="${u._id}">${nombreCompleto} (${u.rol || 'investigador'})</option>`;
+              }).join("");
+          }
+        }
+
+        const res = await fetch(`${API_URL}/nodos`);
+        const nodos = await res.json();
+        const container = document.getElementById("contenedor-cards-nodos");
+
+        if (nodos.length === 0) {
+          container.innerHTML = `<div class="col-12"><div class="alert alert-info">No se encontraron nodos registrados.</div></div>`;
+          return;
+        }
+
+        container.innerHTML = nodos.map(nodo => {
+          let nombreUsuario = '<span class="text-muted fst-italic">Sin asignar</span>';
+          if (nodo.usuario_id) {
+            const uEncontrado = listaUsuariosCache.find(u => u._id === nodo.usuario_id || u._id === String(nodo.usuario_id));
+            if (uEncontrado) {
+              const full = `${uEncontrado.nombre || ''} ${uEncontrado.apellido || ''}`.trim();
+              nombreUsuario = `<span class="badge bg-light text-dark border">${full}</span>`;
+            } else {
+              nombreUsuario = `<span class="font-monospace small text-muted">${String(nodo.usuario_id).substring(0, 8)}...</span>`;
+            }
+          }
+
+          const esActivo = nodo.estado === 'activo';
+          return `
+            <div class="col-md-6 col-lg-4 mb-3">
+              <div class="card h-100 shadow-sm border-${esActivo ? 'primary' : 'secondary'}">
+                <div class="card-header bg-transparent d-flex justify-content-between align-items-center">
+                  <h5 class="card-title text-primary font-monospace mb-0">${nodo.mac_address}</h5>
+                  <span class="badge ${esActivo ? 'bg-success' : 'bg-secondary'}">${nodo.estado || 'activo'}</span>
+                </div>
+                <div class="card-body">
+                  <p class="card-text mb-1"><small class="text-muted">Ciudad:</small> <b>${nodo.ciudad || 'No especificada'}</b></p>
+                  <p class="card-text mb-3"><small class="text-muted">Responsable:</small> ${nombreUsuario}</p>
+                  <div class="d-flex gap-2">
+                    <button class="btn btn-sm btn-primary flex-grow-1" onclick="abrirDetalleNodo('${nodo.mac_address}')">
+                      Ver Lecturas
+                    </button>
+                    <button class="btn btn-sm btn-outline-warning" onclick="toggleEstadoNodo('${nodo._id}', '${nodo.estado}')">
+                      ${esActivo ? 'Inactivar' : 'Activar'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          `;
+        }).join("");
+      } catch (e) {
+        console.error("Error cargando nodos:", e);
+      }
+    }
+
+    async function registrarNodo(e) {
+      e.preventDefault();
+      const usuarioVal = document.getElementById("nodo-usuario").value;
+      const payload = {
+        mac_address: document.getElementById("nodo-mac").value.trim(),
+        ciudad: document.getElementById("nodo-ciudad").value.trim(),
+        estado: "activo",
+        usuario_id: usuarioVal || null
+      };
+
+      try {
+        const res = await fetch(`${API_URL}/nodos`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        if (!res.ok) throw new Error("Error registrando nodo");
+        e.target.reset();
+        cargarNodos();
+      } catch (err) {
+        alert("Error al guardar nodo: " + err.message);
+      }
+    }
+
+    async function toggleEstadoNodo(id, estadoActual) {
+      const nuevoEstado = estadoActual === 'activo' ? 'inactivo' : 'activo';
+      try {
+        await fetch(`${API_URL}/nodos/${id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ estado: nuevoEstado })
+        });
+        cargarNodos();
+      } catch (e) {
+        console.error("Error cambiando estado:", e);
+      }
+    }
+
+    // Paginación y Detalle de Lecturas por Nodo
+    async function abrirDetalleNodo(mac) {
+      macNodoSeleccionado = mac;
+      paginaActualNodo = 1;
+      document.getElementById("titulo-detalle-nodo").innerText = `Datos del Nodo: ${mac}`;
+      const detalleDiv = document.getElementById("detalle-nodo");
+      detalleDiv.classList.remove("d-none");
+      detalleDiv.scrollIntoView({ behavior: 'smooth' });
+      await cargarTablaDetalleNodo();
+    }
+
+    function cerrarDetalleNodo() {
+      document.getElementById("detalle-nodo").classList.add("d-none");
+      macNodoSeleccionado = "";
+    }
+
+    async function cargarTablaDetalleNodo() {
+      if (!macNodoSeleccionado) return;
+      try {
+        const res = await fetch(`${API_URL}/datos/filtrar?sensor=${encodeURIComponent(macNodoSeleccionado)}&page=${paginaActualNodo}&limit=${LIMIT_NODOS_TABLA}`);
+        if (!res.ok) throw new Error("Error al obtener datos filtrados");
+        const datos = await res.json();
+
+        // Control de Paginación del Nodo
+        const totalHeader = res.headers.get("X-Total-Count");
+        const totalCount = totalHeader !== null ? parseInt(totalHeader) : null;
+
+        if (totalCount !== null && !isNaN(totalCount)) {
+          totalPaginasNodo = Math.max(1, Math.ceil(totalCount / LIMIT_NODOS_TABLA));
+          document.getElementById("nodo-pagina-actual").innerText = `Página ${paginaActualNodo} de ${totalPaginasNodo} (${totalCount} lecturas)`;
+        } else {
+          totalPaginasNodo = datos.length < LIMIT_NODOS_TABLA ? paginaActualNodo : paginaActualNodo + 1;
+          document.getElementById("nodo-pagina-actual").innerText = `Página ${paginaActualNodo}`;
+        }
+
+        const btnAnt = document.getElementById("btn-ant-nodo");
+        const btnSig = document.getElementById("btn-sig-nodo");
+        if (btnAnt) btnAnt.disabled = (paginaActualNodo <= 1);
+        if (btnSig) btnSig.disabled = (paginaActualNodo >= totalPaginasNodo || datos.length === 0);
+
+        const tbody = document.getElementById("tabla-detalle-nodo");
+        if (datos.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="4" class="text-center py-3 text-muted">No hay lecturas registradas para este nodo.</td></tr>`;
+          return;
+        }
+
+        tbody.innerHTML = datos.map(d => {
+          const fechaStr = d.fecha ? new Date(d.fecha).toLocaleString() : 'N/A';
+          return `
+            <tr>
+              <td>${fechaStr}</td>
+              <td>${d.temperatura !== undefined ? d.temperatura + ' °C' : '-'}</td>
+              <td>${d.humedad !== undefined ? d.humedad + ' %' : '-'}</td>
+              <td>${d.presion !== undefined ? d.presion + ' hPa' : '-'}</td>
+            </tr>
+          `;
+        }).join("");
+      } catch (e) {
+        console.error("Error al cargar detalle del nodo:", e);
+      }
+    }
+
+    function paginarNodo(direccion) {
+      const nuevaPagina = paginaActualNodo + direccion;
+      if (nuevaPagina >= 1 && nuevaPagina <= totalPaginasNodo) {
+        paginaActualNodo = nuevaPagina;
+        cargarTablaDetalleNodo();
+      }
+    }
+
+    // ==========================================
+    // 4. GESTIÓN DE USUARIOS
+    // ==========================================
+    async function cargarUsuarios() {
+      try {
+        const res = await fetch(`${API_URL}/usuarios`);
+        const usuarios = await res.json();
+        listaUsuariosCache = usuarios;
+        const tbody = document.getElementById("tabla-usuarios");
+
+        if (usuarios.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="5" class="text-center py-3 text-muted">No hay usuarios registrados.</td></tr>`;
+          return;
+        }
+
+        tbody.innerHTML = usuarios.map(u => {
+          const nombreCompleto = `${u.nombre || ''} ${u.apellido || ''}`.trim() || 'Sin nombre';
+          const fechaStr = u.fecha_registro ? new Date(u.fecha_registro).toLocaleString() : '<span class="text-muted fst-italic">No registrada</span>';
+          const rolColor = u.rol === 'ingeniero' ? 'bg-primary' : (u.rol === 'administrador' ? 'bg-danger' : 'bg-secondary');
+
+          return `
+            <tr>
+              <td class="fw-semibold">${nombreCompleto}</td>
+              <td>${u.email || '-'}</td>
+              <td><span class="badge ${rolColor}">${u.rol || 'investigador'}</span></td>
+              <td>${fechaStr}</td>
+              <td class="text-center">
+                <button class="btn btn-outline-danger btn-sm" onclick="eliminarUsuario('${u._id}')">
+                  Eliminar
+                </button>
+              </td>
+            </tr>
+          `;
+        }).join("");
+      } catch (e) {
+        console.error("Error cargando usuarios:", e);
+      }
+    }
+
+    async function registrarUsuario(e) {
+      e.preventDefault();
+      const payload = {
+        nombre: document.getElementById("usu-nombre").value.trim(),
+        apellido: document.getElementById("usu-apellido").value.trim(),
+        email: document.getElementById("usu-email").value.trim(),
+        rol: document.getElementById("usu-rol").value
+      };
+
+      try {
+        const res = await fetch(`${API_URL}/usuarios`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        if (!res.ok) throw new Error("Error creando usuario");
+        e.target.reset();
+        cargarUsuarios();
+      } catch (err) {
+        alert("Error al crear usuario: " + err.message);
+      }
+    }
+
+    async function eliminarUsuario(id) {
+      if (!confirm("¿Deseas eliminar este usuario?")) return;
+      try {
+        const res = await fetch(`${API_URL}/usuarios/${id}`, { method: "DELETE" });
+        if (!res.ok) throw new Error("Error eliminando usuario");
+        cargarUsuarios();
+      } catch (err) {
+        alert("Error al eliminar usuario: " + err.message);
+      }
+    }
+
+    // Inicializar cargando el Dashboard
+    cargarDashboard(1);
+  </script>
+</body>
+</html>
