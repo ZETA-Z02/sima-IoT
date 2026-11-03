@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SIMA IoT</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="css/styles.css" rel="stylesheet">
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+<div class="shell">
+  <nav class="side">
+    <div class="brand">SIMA IoT<small>Monitor ambiental</small></div>
+    <a class="nav-item active" data-view="dashboard">Tiempo real</a>
+    <a class="nav-item" data-view="analisis">Análisis</a>
+    <a class="nav-item" data-view="nodos">Nodos</a>
+    <a class="nav-item" data-view="usuarios">Usuarios</a>
+    <div class="mt-auto small">Conexión <span id="socket-status" class="badge bg-warning text-dark">Conectando…</span></div>
+  </nav>
+
+  <main class="content">
+    <!-- TIEMPO REAL -->
+    <section id="vista-dashboard" class="vista activa">
+      <h2>Tiempo real</h2>
+      <div class="row g-3 mb-4">
+        <div class="col-md-4"><div class="kpi t"><span>Temperatura</span><b id="dash-temp">–</b></div></div>
+        <div class="col-md-4"><div class="kpi h"><span>Humedad</span><b id="dash-hum">–</b></div></div>
+        <div class="col-md-4"><div class="kpi p"><span>Presión</span><b id="dash-pres">–</b></div></div>
+      </div>
+      <div class="panel mb-4"><h5>Últimas lecturas recibidas</h5><div class="chart-box"><canvas id="chart-live"></canvas></div></div>
+      <div class="panel">
+        <h5>Historial de lecturas</h5>
+        <div class="table-responsive"><table class="table table-hover align-middle mb-0">
+          <thead><tr><th>Fecha</th><th>Nodo</th><th>Ciudad</th><th>Temp</th><th>Humedad</th><th>Presión</th></tr></thead>
+          <tbody id="tabla-dashboard"></tbody></table></div>
+        <div class="pager" id="pager-dash"></div>
+      </div>
+    </section>
+
+    <!-- ANÁLISIS -->
+    <section id="vista-analisis" class="vista">
+      <h2>Análisis histórico</h2>
+      <form id="form-filtros" class="panel mb-4">
+        <div class="d-flex flex-wrap gap-2 mb-3">
+          <button type="button" class="btn btn-sm btn-outline-dark" data-rango="1h">Última hora</button>
+          <button type="button" class="btn btn-sm btn-outline-dark" data-rango="hoy">Hoy</button>
+          <button type="button" class="btn btn-sm btn-outline-dark" data-rango="24h">24 horas</button>
+          <button type="button" class="btn btn-sm btn-outline-dark" data-rango="7d">7 días</button>
+          <button type="button" class="btn btn-sm btn-outline-dark" data-rango="30d">30 días</button>
+        </div>
+        <div class="row g-3">
+          <div class="col-md-3"><label class="form-label">Nodo</label><select id="f-sensor" class="form-select"><option value="">Todos</option></select></div>
+          <div class="col-md-3"><label class="form-label">Desde</label><input type="datetime-local" id="f-desde" class="form-control"></div>
+          <div class="col-md-3"><label class="form-label">Hasta</label><input type="datetime-local" id="f-hasta" class="form-control"></div>
+          <div class="col-md-3"><label class="form-label">Temperatura mínima (°C)</label><input type="number" step="0.1" id="f-tempmin" class="form-control"></div>
+          <div class="col-md-3"><label class="form-label">Hora del día desde</label><input type="time" id="f-hdesde" class="form-control"></div>
+          <div class="col-md-3"><label class="form-label">Hora del día hasta</label><input type="time" id="f-hhasta" class="form-control"></div>
+          <div class="col-md-6 d-flex align-items-end gap-2 justify-content-end">
+            <button type="reset" class="btn btn-outline-secondary" id="f-limpiar">Limpiar</button>
+            <button type="button" class="btn btn-outline-dark" id="f-csv" disabled>Descargar CSV</button>
+            <button type="submit" class="btn btn-accent">Aplicar filtros</button>
+          </div>
+        </div>
+      </form>
+      <div id="an-aviso" class="text-muted small mb-2"></div>
+      <div class="row g-3 mb-4" id="an-stats"></div>
+      <div class="panel mb-3"><h5>Temperatura (°C)</h5><div class="chart-box"><canvas id="c-temp"></canvas></div></div>
+      <div class="panel mb-3"><h5>Humedad (%)</h5><div class="chart-box"><canvas id="c-hum"></canvas></div></div>
+      <div class="panel"><h5>Presión (hPa)</h5><div class="chart-box"><canvas id="c-pres"></canvas></div></div>
+    </section>
+
+    <!-- NODOS -->
+    <section id="vista-nodos" class="vista">
+      <h2>Nodos sensores</h2>
+      <form id="form-nodo" class="panel mb-4 row g-3">
+        <div class="col-md-3"><label class="form-label">MAC / ID del sensor</label><input id="nodo-mac" class="form-control" placeholder="ESP32_03" required></div>
+        <div class="col-md-3"><label class="form-label">Ciudad</label><input id="nodo-ciudad" class="form-control" placeholder="Puno" required></div>
+        <div class="col-md-4"><label class="form-label">Responsable (opcional)</label><select id="nodo-usuario" class="form-select"><option value="">Sin asignar</option></select></div>
+        <div class="col-md-2 d-flex align-items-end"><button class="btn btn-accent w-100">Registrar nodo</button></div>
+      </form>
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5 class="mb-0">Dispositivos registrados</h5>
+        <input id="buscar-ciudad" class="form-control form-control-sm w-auto" placeholder="Buscar por ciudad…">
+      </div>
+      <div class="row" id="cards-nodos"></div>
+
+      <div id="detalle-nodo" class="panel mt-4 d-none">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h5 id="titulo-detalle" class="mb-0"></h5>
+          <button class="btn btn-sm btn-outline-secondary" id="cerrar-detalle">Cerrar</button>
+        </div>
+        <div class="row g-2 mb-3">
+          <div class="col-auto"><input type="datetime-local" id="nd-desde" class="form-control form-control-sm"></div>
+          <div class="col-auto"><input type="datetime-local" id="nd-hasta" class="form-control form-control-sm"></div>
+          <div class="col-auto"><button class="btn btn-sm btn-accent" id="nd-filtrar">Filtrar</button> <button class="btn btn-sm btn-outline-secondary" id="nd-limpiar">Limpiar</button></div>
+        </div>
+        <div class="table-responsive"><table class="table table-hover align-middle mb-0">
+          <thead><tr><th>Fecha</th><th>Temp</th><th>Humedad</th><th>Presión</th></tr></thead>
+          <tbody id="tabla-detalle"></tbody></table></div>
+        <div class="pager" id="pager-nodo"></div>
+      </div>
+    </section>
+
+    <!-- USUARIOS -->
+    <section id="vista-usuarios" class="vista">
+      <h2>Usuarios</h2>
+      <form id="form-usuario" class="panel mb-4 row g-3">
+        <div class="col-md-3"><label class="form-label">Nombre</label><input id="usu-nombre" class="form-control" required></div>
+        <div class="col-md-3"><label class="form-label">Apellido</label><input id="usu-apellido" class="form-control"></div>
+        <div class="col-md-3"><label class="form-label">Correo</label><input type="email" id="usu-email" class="form-control" required></div>
+        <div class="col-md-2"><label class="form-label">Rol</label><select id="usu-rol" class="form-select"><option>investigador</option><option>ingeniero</option><option>administrador</option></select></div>
+        <div class="col-md-1 d-flex align-items-end"><button class="btn btn-accent w-100">Crear</button></div>
+      </form>
+      <div class="panel"><div class="table-responsive"><table class="table table-hover align-middle mb-0">
+        <thead><tr><th>Nombre</th><th>Correo</th><th>Rol</th><th>Registro</th><th></th></tr></thead>
+        <tbody id="tabla-usuarios"></tbody></table></div></div>
+    </section>
+  </main>
+</div>
+<div id="toast" class="toast-msg"></div>
+<script src="js/config.js"></script>
+<script src="js/utils.js"></script>
+<script src="js/api.js"></script>
+<script src="js/dashboard.js"></script>
+<script src="js/analisis.js"></script>
+<script src="js/nodos.js"></script>
+<script src="js/usuarios.js"></script>
+<script src="js/main.js"></script>
+
+</body>
+</html>
